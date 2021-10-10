@@ -1,30 +1,38 @@
 use home::home_dir;
-use mpd::{Client, Idle};
-use mpd::{State::Play, Subsystem::Player};
+use mpd::{Client, Idle, State::Play, Subsystem::Player};
 use notify_rust::{Notification, Urgency::Normal};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, thread::sleep, time::Duration};
 
 fn main() {
-	let mut conn = Client::connect("0.0.0.0:6600").unwrap();
+	let mut conn = {
+		loop {
+			let conn = Client::connect("127.0.0.1:6600");
+			if let Ok(value) = conn {
+				break value;
+			}
+			sleep(Duration::from_secs(1));
+		}
+	};
 	loop {
 		conn.wait(&[Player]).unwrap();
 		let status = conn.status().unwrap();
 		if status.state == Play {
 			let song = conn.currentsong().unwrap().unwrap();
-			println!("{}", &song.file);
-			let artpath = format!(
+			let file = get_file(song.file);
+			let cover_path = format!(
 				"{}/Music/{}/cover.jpg",
 				home_dir().unwrap().display().to_string(),
-				song.file.rsplit_once('/').unwrap().0
+				file
 			);
 
-			let output = parse_tags(song.tags, song.title);
+			let parsed_tags = parse_tags(song.tags, song.title);
 
 			Notification::new()
 				.summary("MPD")
-				.body(&output)
-				.icon(&artpath)
+				.body(&parsed_tags)
+				.icon(&cover_path)
 				.urgency(Normal)
+				//arbitrary id 
 				.id(3094822)
 				.show()
 				.unwrap();
@@ -35,8 +43,8 @@ fn main() {
 fn parse_tags(tags: BTreeMap<String, String>, title: Option<String>) -> String {
 	let mut parsed_tags = String::new();
 
-	if title.is_some() {
-		parsed_tags.push_str(&*format!("\n<b>Title:</b>\t<span>{}</span>", title.unwrap()));
+	if let Some(value) = title {
+		parsed_tags.push_str(&*format!("\n<b>Title:</b>\t<span>{}</span>", &value));
 	}
 
 	//tags will only contain duration if song lacks tags
@@ -52,4 +60,14 @@ fn parse_tags(tags: BTreeMap<String, String>, title: Option<String>) -> String {
 		}
 	}
 	parsed_tags
+}
+
+fn get_file(path: String) -> String {
+	let path_parsed = path.rsplit_once('/');
+
+	if let Some(value) = path_parsed {
+		value.0.to_string()
+	} else {
+		path.split_once('.').unwrap().0.to_string()
+	}
 }
