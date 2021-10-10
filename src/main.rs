@@ -1,7 +1,7 @@
 use home::home_dir;
 use mpd::{Client, Idle, State::Play, Subsystem::Player};
 use notify_rust::{Notification, Urgency::Normal};
-use std::{collections::BTreeMap, thread::sleep, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, thread::sleep, time::Duration};
 
 fn main() {
 	let mut conn = {
@@ -18,11 +18,11 @@ fn main() {
 		let status = conn.status().unwrap();
 		if status.state == Play {
 			let song = conn.currentsong().unwrap().unwrap();
-			let file = get_file(song.file);
+			let file = PathBuf::from(song.file);
 			let cover_path = format!(
 				"{}/Music/{}/cover.jpg",
 				home_dir().unwrap().display().to_string(),
-				file
+				file.parent().unwrap_or(&PathBuf::new()).to_str().unwrap_or_default()
 			);
 
 			let parsed_tags = parse_tags(song.tags, song.title);
@@ -60,14 +60,4 @@ fn parse_tags(tags: BTreeMap<String, String>, title: Option<String>) -> String {
 		}
 	}
 	parsed_tags
-}
-
-fn get_file(path: String) -> String {
-	let path_parsed = path.rsplit_once('/');
-
-	if let Some(value) = path_parsed {
-		value.0.to_string()
-	} else {
-		path.split_once('.').unwrap().0.to_string()
-	}
 }
