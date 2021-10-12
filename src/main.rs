@@ -1,55 +1,72 @@
 use home::home_dir;
-use mpd::{Client, Idle, State::Play, Subsystem::Player};
+use mpd::{Client, Idle, Song, State::Play, Subsystem::Player};
 use notify_rust::{Notification, Urgency::Normal};
-use std::{collections::BTreeMap, path::PathBuf, thread::sleep, time::Duration};
+use std::{os::unix::net::UnixStream, path::PathBuf, thread::sleep, time::Duration};
 
 fn main() {
-	let mut conn = {
-		loop {
-			let conn = Client::connect("127.0.0.1:6600");
-			if let Ok(value) = conn {
-				break value;
-			}
-			sleep(Duration::from_secs(1));
-		}
-	};
+	let mut conn = get_conn();
+	//conn.music_directory only works when connected via unix socket
+	let music_dir = conn.music_directory().unwrap();
+
 	loop {
 		conn.wait(&[Player]).unwrap();
 		let status = conn.status().unwrap();
-		if status.state == Play {
-			let song = conn.currentsong().unwrap().unwrap();
-			let file = PathBuf::from(song.file);
-			let cover_path = format!(
-				"{}/Music/{}/cover.jpg",
-				home_dir().unwrap().display().to_string(),
-				file.parent().unwrap_or(&PathBuf::new()).to_str().unwrap_or_default()
-			);
-
-			let parsed_tags = parse_tags(song.tags, song.title);
-
-			Notification::new()
-				.summary("MPD")
-				.body(&parsed_tags)
-				.icon(&cover_path)
-				.urgency(Normal)
-				//arbitrary id 
-				.id(3094822)
-				.show()
-				.unwrap();
+		if status.state != Play {
+			continue;
 		}
+		let song = conn.currentsong().unwrap().unwrap();
+		let (parsed_tags, cover_path) = parse_info(song, &music_dir);
+		send_notif(parsed_tags, cover_path);
 	}
 }
 
-fn parse_tags(tags: BTreeMap<String, String>, title: Option<String>) -> String {
-	let mut parsed_tags = String::new();
+fn send_notif(parsed_tags: String, cover_path: String) {
+	Notification::new()
+		.summary("MPD")
+		.body(&parsed_tags)
+		.icon(&cover_path)
+		.urgency(Normal)
+		//arbitrary id
+		.id(3094822)
+		.show()
+		.unwrap();
+}
 
-	if let Some(value) = title {
-		parsed_tags.push_str(&*format!("\n<b>Title:</b>\t<span>{}</span>", &value));
+fn get_conn() -> Client<UnixStream> {
+	loop {
+		let sock = UnixStream::connect(format!("{}/.config/mpd/socket", home_dir().unwrap().display()));
+		if let Ok(socket) = sock {
+			let conn = Client::new(socket);
+			if let Ok(connection) = conn {
+				break connection;
+			}
+		}
+		sleep(Duration::from_secs(1));
 	}
+}
+
+fn parse_info(song: Song, music_dir: &str) -> (String, String) {
+	let mut parsed_tags = String::new();
+	let file = PathBuf::from(song.file);
+
+	let cover_path = format!(
+		"{}/{}/cover.jpg",
+		music_dir,
+		file.parent().unwrap_or(&PathBuf::new()).to_string_lossy()
+	);
+
+	if let Some(value) = song.title {
+		parsed_tags.push_str(&*format!("\n<b>Title:</b>\t<span>{}</span>", &value));
+	} else {
+		//Insert file name in the event song lacks title tag
+		parsed_tags.push_str(&*format!("\n<b>Title:</b>\t<span>{}</span>", &file.file_stem().unwrap().to_string_lossy()));
+	}
+
+	let tags = song.tags;
 
 	//tags will only contain duration if song lacks tags
 	if tags.len() == 1 {
-		return parsed_tags;
+		return (parsed_tags, cover_path);
 	}
 
 	for (key, value) in tags.into_iter() {
@@ -59,5 +76,5 @@ fn parse_tags(tags: BTreeMap<String, String>, title: Option<String>) -> String {
 			_ => (),
 		}
 	}
-	parsed_tags
+	(parsed_tags, cover_path)
 }
