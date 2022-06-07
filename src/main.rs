@@ -1,17 +1,25 @@
 use home::home_dir;
-use mpd::{Client, Idle, Song, State::Play, Subsystem::Player};
+use mpd::{error::Error, Client, Idle, Song, State::Play, Subsystem::Player};
 use notify_rust::{Notification, Urgency::Normal};
-use std::{os::unix::net::UnixStream, path::PathBuf, thread::sleep, time::Duration};
-
+use std::{io::Error as IoError, os::unix::net::UnixStream, path::PathBuf, thread::sleep, time::Duration};
 fn main() {
-	let mut conn = get_conn();
-	//conn.music_directory only works when connected via unix socket
-	let music_dir = conn.music_directory().unwrap();
+	loop {
+		let mut conn = get_conn();
+		//conn.music_directory only works when connected via unix socket
+		let music_dir = conn.music_directory().unwrap();
+		notif_loop(conn, music_dir);
+	}
+}
 
+fn notif_loop(mut conn: Client<UnixStream>, music_dir: String) {
 	loop {
 		conn.wait(&[Player]).unwrap();
-		let status = conn.status().unwrap();
-		if status.state != Play {
+		let status = conn.status();
+		if matches!(status, Err(Error::Io(IoError { .. }))) {
+			println!("Error: Connection was probaby broken, attempting to get a new connection...");
+			break;
+		}
+		if status.unwrap().state != Play {
 			continue;
 		}
 		let song = conn.currentsong().unwrap().unwrap();
@@ -33,14 +41,16 @@ fn send_notif(parsed_tags: String, cover_path: String) {
 }
 
 fn get_conn() -> Client<UnixStream> {
+	println!("Attempting connection...");
 	loop {
-		let sock = UnixStream::connect(format!("{}/.config/mpd/socket", home_dir().unwrap().display()));
+		let sock = UnixStream::connect(home_dir().unwrap().join(".config/mpd/socket"));
 		if let Ok(socket) = sock {
 			let conn = Client::new(socket);
 			if let Ok(connection) = conn {
 				break connection;
 			}
 		}
+		println!("Connection failed, retrying in one second");
 		sleep(Duration::from_secs(1));
 	}
 }
